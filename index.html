@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NEO Orrery</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene"></canvas>
+      <div id="loading">Loading NEO data&hellip;</div>
+
+      <div id="overlay">
+        <div class="panel" id="time-panel">
+          <div id="date-readout">--</div>
+          <input type="range" id="scrubber" min="0" max="1" step="0.5" value="0" />
+          <div class="row">
+            <button id="play-pause">Play</button>
+            <label class="speed-label">
+              speed: <span id="speed-readout">1 day/s</span>
+              <input type="range" id="speed" min="0" max="100" step="1" value="0" />
+            </label>
+          </div>
+        </div>
+
+        <div class="panel" id="toggle-panel">
+          <label><input type="checkbox" id="toggle-neo-orbits" checked /> NEO orbit lines</label>
+          <label><input type="checkbox" id="toggle-labels" checked /> Planet labels</label>
+        </div>
+
+        <div class="panel" id="approach-panel">
+          <h3>Close approaches within 1 day</h3>
+          <div id="approach-list">none</div>
+        </div>
+
+        <div class="panel" id="info-panel" hidden>
+          <h3 id="info-title"></h3>
+          <pre id="info-body"></pre>
+          <button id="info-close">close</button>
+        </div>
+
+        <div id="perf-readout"></div>
+      </div>
+
+      <div id="labels-layer"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
