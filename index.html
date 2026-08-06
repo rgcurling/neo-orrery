@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Apsis — NEO Orrery</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #000308;
+        overflow: hidden;
+        font-family: ui-monospace, "SF Mono", Menlo, monospace;
+        color: #cfe8ff;
+      }
+      #app {
+        width: 100vw;
+        height: 100vh;
+      }
+      #app canvas {
+        display: block;
+      }
+      .panel {
+        position: fixed;
+        z-index: 10;
+        padding: 10px 12px;
+        background: rgba(0, 8, 16, 0.65);
+        border: 1px solid rgba(140, 190, 255, 0.25);
+        border-radius: 6px;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+      #stats {
+        top: 12px;
+        left: 12px;
+        white-space: pre;
+        pointer-events: none;
+      }
+      #controls {
+        left: 12px;
+        bottom: 12px;
+        width: 360px;
+      }
+      #date-readout {
+        font-size: 15px;
+        margin-bottom: 6px;
+        letter-spacing: 0.02em;
+      }
+      #scrubber {
+        width: 100%;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 8px;
+      }
+      .row label {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        white-space: nowrap;
+      }
+      #play-pause {
+        font-family: inherit;
+        font-size: 12px;
+        background: rgba(140, 190, 255, 0.12);
+        color: #cfe8ff;
+        border: 1px solid rgba(140, 190, 255, 0.35);
+        border-radius: 4px;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      #play-pause:hover {
+        background: rgba(140, 190, 255, 0.22);
+      }
+      #speed {
+        flex: 1;
+      }
+      #inspector {
+        top: 12px;
+        right: 12px;
+        width: 260px;
+      }
+      #inspector h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        color: #ffe9b0;
+      }
+      #inspector dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 2px 8px;
+      }
+      #inspector dt {
+        opacity: 0.65;
+      }
+      #inspector dd {
+        margin: 0;
+        text-align: right;
+      }
+      #inspector-follow-btn {
+        margin-top: 8px;
+        width: 100%;
+        font-family: inherit;
+        font-size: 12px;
+        background: rgba(140, 190, 255, 0.12);
+        color: #cfe8ff;
+        border: 1px solid rgba(140, 190, 255, 0.35);
+        border-radius: 4px;
+        padding: 5px 0;
+        cursor: pointer;
+      }
+      #inspector-follow-btn:hover {
+        background: rgba(140, 190, 255, 0.22);
+      }
+      #follow-hud {
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        border-color: rgba(255, 224, 130, 0.4);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      #follow-hud strong {
+        color: #ffe9b0;
+      }
+      #follow-exit-btn {
+        font-family: inherit;
+        font-size: 11px;
+        background: rgba(255, 224, 130, 0.12);
+        color: #ffe9b0;
+        border: 1px solid rgba(255, 224, 130, 0.35);
+        border-radius: 4px;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      #follow-exit-btn:hover {
+        background: rgba(255, 224, 130, 0.22);
+      }
+      #close-approach-banner {
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        border-color: rgba(255, 90, 90, 0.5);
+        color: #ffd7d7;
+      }
+      #close-approach-banner strong {
+        color: #ff8080;
+      }
+      #labels {
+        position: fixed;
+        z-index: 5;
+        inset: 0;
+        pointer-events: none;
+      }
+      #labels.hidden {
+        display: none;
+      }
+      .planet-label {
+        position: absolute;
+        transform: translate(-50%, -140%);
+        font-size: 11px;
+        color: #e8f2ff;
+        text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 0 2px rgba(0, 0, 0, 0.9);
+        white-space: nowrap;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="stats" class="panel">Loading...</div>
+
+    <div id="controls" class="panel">
+      <div id="date-readout">--</div>
+      <input id="scrubber" type="range" min="0" max="1" step="any" value="0" />
+      <div class="row">
+        <button id="play-pause" type="button">Pause</button>
+        <label>Speed <input id="speed" type="range" min="0" max="1" step="any" value="0.5" /></label>
+        <span id="speed-label"></span>
+      </div>
+      <div class="row">
+        <label><input id="toggle-neo-orbits" type="checkbox" /> NEO orbits (dense)</label>
+        <label><input id="toggle-labels" type="checkbox" /> Labels</label>
+      </div>
+    </div>
+
+    <div id="inspector" class="panel" hidden></div>
+    <div id="close-approach-banner" class="panel" hidden></div>
+    <div id="follow-hud" class="panel" hidden>
+      Following <strong id="follow-hud-label"></strong>
+      <button id="follow-exit-btn" type="button">Exit (Esc)</button>
+    </div>
+    <div id="labels" class="hidden"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
