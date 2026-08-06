@@ -115,6 +115,38 @@
       #inspector-follow-btn:hover {
         background: rgba(140, 190, 255, 0.22);
       }
+      #inspector h3.sentry-heading {
+        margin-top: 10px;
+        color: #ec835a;
+      }
+      #sentry-legend {
+        bottom: 12px;
+        right: 12px;
+        width: 260px;
+      }
+      #sentry-legend h3 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        font-weight: normal;
+        color: #cfe8ff;
+      }
+      .legend-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-top: 4px;
+      }
+      .legend-row .swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: none;
+        box-shadow: 0 0 4px rgba(255, 255, 255, 0.3);
+      }
+      .legend-count {
+        opacity: 0.6;
+        margin-left: auto;
+      }
       #follow-hud {
         bottom: 12px;
         left: 50%;
@@ -191,6 +223,7 @@
     </div>
 
     <div id="inspector" class="panel" hidden></div>
+    <div id="sentry-legend" class="panel"></div>
     <div id="close-approach-banner" class="panel" hidden></div>
     <div id="follow-hud" class="panel" hidden>
       Following <strong id="follow-hud-label"></strong>

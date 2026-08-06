@@ -45,3 +45,23 @@ export interface CloseApproach {
   /** Relative velocity at close approach, km/s */
   vRelKmS: number;
 }
+
+/** Sentry impact-monitoring summary for one object (Mode S of the Sentry API).
+ * Only objects with a cataloged nonzero impact probability appear here -- most
+ * NEOs are not in Sentry at all. */
+export interface SentryRecord {
+  /** Designation, matches NeoRecord.designation */
+  designation: string;
+  /** Cumulative Palermo technical impact hazard scale rating */
+  psCum: number;
+  /** Maximum (single virtual-impactor) Palermo scale rating */
+  psMax: number;
+  /** Maximum Torino scale rating */
+  tsMax: number;
+  /** Cumulative impact probability across all cataloged virtual impactors */
+  impactProbability: number;
+  /** Number of cataloged potential impacts (virtual impactors) */
+  potentialImpactCount: number;
+  /** Years spanned by the cataloged potential impacts, e.g. "2068-2122" */
+  yearRange: string;
+}

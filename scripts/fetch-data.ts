@@ -8,7 +8,7 @@
 // re-checking that endpoint.
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { CloseApproach, NeoRecord, OrbitalElements } from '../src/types.js';
+import type { CloseApproach, NeoRecord, OrbitalElements, SentryRecord } from '../src/types.js';
 
 const DATA_DIR = path.resolve(import.meta.dirname, '../public/data');
 
@@ -41,6 +41,21 @@ interface CadResponse {
   fields: string[];
   data: (string | null)[][];
   count: number;
+}
+
+interface SentrySummaryRow {
+  des: string;
+  ps_cum: string;
+  ps_max: string;
+  ts_max: string;
+  ip: string;
+  n_imp: number;
+  range: string;
+}
+
+interface SentryResponse {
+  count: number;
+  data: SentrySummaryRow[];
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -146,15 +161,49 @@ async function fetchCloseApproaches(): Promise<CloseApproach[]> {
   return approaches;
 }
 
+/** Impact-monitoring summary data (Palermo scale, impact probability, etc.)
+ * from JPL's Sentry system -- confirmed live against
+ * https://ssd-api.jpl.nasa.gov/doc/sentry.html before writing this function.
+ * Mode selection is param-driven and easy to get wrong: `all=1` selects
+ * Mode V (every individual virtual-impactor record, ~46k rows, `ps` per-VI)
+ * -- passing NO query params at all is what selects Mode S, the one-row-
+ * per-object summary with `ps_cum`/`ps_max` this app actually wants. */
+async function fetchSentryData(): Promise<SentryRecord[]> {
+  const url = 'https://ssd-api.jpl.nasa.gov/sentry.api';
+  const res = await fetchJson<SentryResponse>(url);
+  console.log(`sentry.api: ${res.count} Sentry-monitored objects returned`);
+
+  const records: SentryRecord[] = res.data.map((row) => ({
+    designation: row.des.trim(),
+    psCum: Number(row.ps_cum),
+    psMax: Number(row.ps_max),
+    tsMax: Number(row.ts_max),
+    impactProbability: Number(row.ip),
+    potentialImpactCount: row.n_imp,
+    yearRange: row.range,
+  }));
+
+  console.log(`Sentry records kept: ${records.length}`);
+  return records;
+}
+
 async function main() {
   await mkdir(DATA_DIR, { recursive: true });
 
-  const [neos, closeApproaches] = await Promise.all([fetchNeos(), fetchCloseApproaches()]);
+  const [neos, closeApproaches, sentry] = await Promise.all([
+    fetchNeos(),
+    fetchCloseApproaches(),
+    fetchSentryData(),
+  ]);
 
   await writeFile(path.join(DATA_DIR, 'neos.json'), JSON.stringify(neos));
   await writeFile(path.join(DATA_DIR, 'close-approaches.json'), JSON.stringify(closeApproaches));
+  await writeFile(path.join(DATA_DIR, 'sentry.json'), JSON.stringify(sentry));
 
-  console.log(`Wrote ${neos.length} NEOs and ${closeApproaches.length} close approaches to ${DATA_DIR}`);
+  console.log(
+    `Wrote ${neos.length} NEOs, ${closeApproaches.length} close approaches, and ` +
+    `${sentry.length} Sentry records to ${DATA_DIR}`
+  );
 }
 
 main().catch((err) => {

@@ -15,7 +15,7 @@ import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { PLANETS } from './planets.js';
 import { stateAt, dateToJD, jdToDate, type Vec3 } from './orbit.js';
-import type { CloseApproach, NeoRecord, OrbitalElements } from './types.js';
+import type { CloseApproach, NeoRecord, OrbitalElements, SentryRecord } from './types.js';
 
 const ORBIT_SAMPLES = 128;
 const PROFILE_WINDOW_FRAMES = 30;
@@ -47,6 +47,27 @@ const PLANET_RADIUS: Record<string, number> = {
 const NEO_RADIUS = 0.008;
 const NEO_BASE_COLOR = new THREE.Color(0x6f93b8);
 const NEO_FLASH_COLOR = new THREE.Color(0xff3b3b);
+const SENTRY_SCALE = 3; // Sentry-tracked NEOs render larger so they're findable in the haze
+
+// Palermo Scale risk tiers, per JPL's own interpretation of the scale:
+// PS < -2 no likely consequence, -2..0 merits careful monitoring, >=0 merits
+// concern. Colors are the app's fixed status palette (good/serious/critical) --
+// never reused for ordinary series data, always paired with a label in the UI.
+interface SentryTier {
+  key: string;
+  label: string;
+  color: THREE.Color;
+}
+const SENTRY_TIERS: SentryTier[] = [
+  { key: 'critical', label: 'PS ≥ 0 — merits concern', color: new THREE.Color(0xd03b3b) },
+  { key: 'serious', label: '-2 ≤ PS < 0 — merits monitoring', color: new THREE.Color(0xec835a) },
+  { key: 'good', label: 'PS < -2 — no likely consequence', color: new THREE.Color(0x0ca30c) },
+];
+function sentryTierFor(psCum: number): SentryTier {
+  if (psCum >= 0) return SENTRY_TIERS[0];
+  if (psCum >= -2) return SENTRY_TIERS[1];
+  return SENTRY_TIERS[2];
+}
 
 /** Position on an orbit's fixed ellipse at mean anomaly M, independent of time. */
 function orbitPositionAtM(elements: OrbitalElements, M: number): Vec3 {
@@ -273,13 +294,17 @@ async function main() {
   scene.add(planetOrbits);
 
   statsEl.textContent = 'Loading NEOs...';
-  const [neos, closeApproaches]: [NeoRecord[], CloseApproach[]] = await Promise.all([
+  const [neos, closeApproaches, sentryRecords]: [NeoRecord[], CloseApproach[], SentryRecord[]] = await Promise.all([
     fetch(`${import.meta.env.BASE_URL}data/neos.json`).then((res) => res.json()),
     fetch(`${import.meta.env.BASE_URL}data/close-approaches.json`).then((res) => res.json()),
+    fetch(`${import.meta.env.BASE_URL}data/sentry.json`).then((res) => res.json()),
   ]);
 
   const designationToIndex = new Map<string, number>();
   neos.forEach((neo, i) => designationToIndex.set(neo.designation, i));
+
+  const sentryByDesignation = new Map<string, SentryRecord>();
+  sentryRecords.forEach((s) => sentryByDesignation.set(s.designation, s));
 
   // Additive + low opacity so the NEO cloud reads as a haze that thickens
   // where orbits cluster, rather than a scatter of hard dots.
@@ -320,8 +345,38 @@ async function main() {
   for (let i = 0; i < neos.length; i++) {
     neoMesh.setColorAt(i, NEO_BASE_COLOR);
   }
+
+  // Impact-risk overlay: Sentry-tracked objects get their Palermo-scale tier
+  // color instead of the default swarm blue, and render larger so ~2k objects
+  // out of ~42k are actually findable. sentryRestColor remembers each tinted
+  // instance's resting color so close-approach flashing (below) can revert to
+  // the right color instead of stomping the tier tint back to default blue.
+  const sentryRestColor = new Map<number, THREE.Color>();
+  const neoScale = new Float32Array(neos.length).fill(1);
+  const sentryTierCounts = new Map<string, number>();
+  for (const record of sentryRecords) {
+    const idx = designationToIndex.get(record.designation);
+    if (idx === undefined) continue;
+    const tier = sentryTierFor(record.psCum);
+    neoMesh.setColorAt(idx, tier.color);
+    sentryRestColor.set(idx, tier.color);
+    neoScale[idx] = SENTRY_SCALE;
+    sentryTierCounts.set(tier.key, (sentryTierCounts.get(tier.key) ?? 0) + 1);
+  }
+
   neoMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
   scene.add(neoMesh);
+
+  const legendEl = document.getElementById('sentry-legend')!;
+  legendEl.innerHTML =
+    `<h3>Impact risk (Sentry) — ${sentryRecords.length.toLocaleString()} tracked</h3>` +
+    SENTRY_TIERS.map((tier) => {
+      const count = sentryTierCounts.get(tier.key) ?? 0;
+      return (
+        `<div class="legend-row"><span class="swatch" style="background:#${tier.color.getHexString()}"></span>` +
+        `${tier.label} <span class="legend-count">(${count})</span></div>`
+      );
+    }).join('');
 
   // NEO orbit lines: built lazily on first toggle-on, since 42k merged
   // ellipses is expensive to compute and nobody needs it by default.
@@ -583,6 +638,7 @@ async function main() {
     }
     if (hit.object === neoMesh && hit.instanceId !== undefined) {
       const neo = neos[hit.instanceId];
+      const sentry = sentryByDesignation.get(neo.designation);
       inspectorEl.hidden = false;
       inspectorEl.innerHTML =
         `<h3>${neo.name ?? neo.fullName}</h3><dl>` +
@@ -598,6 +654,15 @@ async function main() {
           })
           .join('') +
         `</dl>` +
+        (sentry
+          ? `<h3 class="sentry-heading">Sentry — ${sentryTierFor(sentry.psCum).label}</h3><dl>` +
+            `<dt>PS (cum.)</dt><dd>${sentry.psCum.toFixed(2)}</dd>` +
+            `<dt>PS (max)</dt><dd>${sentry.psMax.toFixed(2)}</dd>` +
+            `<dt>impact prob.</dt><dd>${sentry.impactProbability.toExponential(2)}</dd>` +
+            `<dt>potential impacts</dt><dd>${sentry.potentialImpactCount}</dd>` +
+            `<dt>years</dt><dd>${sentry.yearRange}</dd>` +
+            `</dl>`
+          : '') +
         `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
       inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
         startFollow({
@@ -630,7 +695,7 @@ async function main() {
       if (!activeDesignations.has(designation)) {
         const idx = designationToIndex.get(designation);
         if (idx !== undefined) {
-          neoMesh.setColorAt(idx, NEO_BASE_COLOR);
+          neoMesh.setColorAt(idx, sentryRestColor.get(idx) ?? NEO_BASE_COLOR);
           colorChanged = true;
         }
       }
@@ -656,6 +721,7 @@ async function main() {
 
   // --- Animation loop ---
   const instanceTransform = new THREE.Matrix4();
+  const scaleVector = new THREE.Vector3();
   const projected = new THREE.Vector3();
   let lastFrameTime = performance.now();
   let frameCount = 0;
@@ -691,6 +757,8 @@ async function main() {
     for (let i = 0; i < neos.length; i++) {
       const p = stateAt(neos[i].elements, simJd);
       instanceTransform.makeTranslation(p.x, p.y, p.z);
+      const scale = neoScale[i];
+      if (scale !== 1) instanceTransform.scale(scaleVector.setScalar(scale));
       neoMesh.setMatrixAt(i, instanceTransform);
     }
     neoMesh.instanceMatrix.needsUpdate = true;
