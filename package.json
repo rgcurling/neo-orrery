@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "fetch-data": "tsx scripts/fetch-data.ts",
+    "fetch-data": "NODE_USE_ENV_PROXY=1 tsx scripts/fetch-data.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
