@@ -19,6 +19,10 @@ Built with Vite + TypeScript + three.js, tested with vitest.
 
 See [Textures](#textures) below for close-ups of Earth and Saturn.
 
+**Follow cam, in motion** — picked from the [jump-to list](#controls), eases in, then tracks Earth's rotation as simulated time plays:
+
+![Follow cam locked onto Earth, showing its rotation and the day/night terminator sweeping as simulated time plays](docs/screenshots/follow-earth.gif)
+
 ## Quick start
 
 ```bash
