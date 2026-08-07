@@ -77,13 +77,17 @@ const PLANET_ROTATION_DAYS: Record<string, number> = {
 const EARTH_CLOUDS_ROTATION_DAYS = 5; // faster drift than the surface, for visual life
 
 const TEXTURE_BASE = `${import.meta.env.BASE_URL}textures/`;
+const HIRES_TEXTURE_BASE = `${import.meta.env.BASE_URL}textures-hires/`;
 const textureLoader = new THREE.TextureLoader();
 
-function loadTexture(file: string, colorSpace: THREE.ColorSpace): Promise<THREE.Texture> {
-  return textureLoader.loadAsync(TEXTURE_BASE + file).then((tex) => {
+function loadTextureFrom(url: string, colorSpace: THREE.ColorSpace): Promise<THREE.Texture> {
+  return textureLoader.loadAsync(url).then((tex) => {
     tex.colorSpace = colorSpace;
     return tex;
   });
+}
+function loadTexture(file: string, colorSpace: THREE.ColorSpace): Promise<THREE.Texture> {
+  return loadTextureFrom(TEXTURE_BASE + file, colorSpace);
 }
 
 /** One-time runtime invert for the specular map: bright (ocean) in the
@@ -372,6 +376,7 @@ async function main() {
     group: THREE.Group;
     mesh: THREE.Mesh;
     clouds: THREE.Mesh | null;
+    ring: THREE.Mesh | null;
     elements: OrbitalElements;
     label: HTMLDivElement;
     rotationDays: number;
@@ -437,12 +442,13 @@ async function main() {
       group.add(clouds);
     }
 
+    let ring: THREE.Mesh | null = null;
     if (planet.name === 'Saturn') {
       const innerRadius = radius * 1.3;
       const outerRadius = radius * 2.3;
       const ringGeometry = new THREE.RingGeometry(innerRadius, outerRadius, 128, 1);
       fixRingUVs(ringGeometry, innerRadius, outerRadius);
-      const ring = new THREE.Mesh(
+      ring = new THREE.Mesh(
         ringGeometry,
         new THREE.MeshStandardMaterial({
           map: saturnRingTex,
@@ -468,6 +474,7 @@ async function main() {
       group,
       mesh,
       clouds,
+      ring,
       elements: planet.elements,
       label,
       rotationDays: PLANET_ROTATION_DAYS[planet.name] ?? 1,
@@ -703,6 +710,134 @@ async function main() {
     label: string;
     getPosition: () => Vec3;
     viewDistance: number;
+    planetEntry?: (typeof planetMeshes)[number];
+  }
+
+  // --- Lazy high-res swap: fetched only when follow-cam locks onto that
+  // specific planet, disposed on exit, at most one hi-res set resident at a
+  // time. Hosted in a separate committed directory (public/textures-hires/)
+  // rather than hotlinked from the Solar System Scope CDN -- confirmed live
+  // that CDN doesn't send Access-Control-Allow-Origin, so a WebGL texture
+  // upload from it throws a cross-origin SecurityError regardless of
+  // crossOrigin='anonymous' on this end. Self-hosting is the only option
+  // that actually works from a static GitHub Pages site with no proxy.
+  // Resized to 4096x2048 rather than the source 8K: the full 8K set for
+  // these bodies ran ~32MB even at WebP q85, disproportionate for an
+  // opt-in follow-cam upgrade; 4K is still a real sharpness jump over the
+  // base 2K set at ~7.4MB. Uranus and Neptune have no resolution beyond 2K
+  // published by the source at all, so follow-cam on them is a no-op here.
+  const HIRES_AVAILABLE = new Set(['Mercury', 'Venus', 'Earth', 'Mars', 'Jupiter', 'Saturn']);
+  const HIRES_PLANET_FILE: Record<string, string> = {
+    Mercury: 'mercury.webp',
+    Venus: 'venus.webp',
+    Mars: 'mars.webp',
+    Jupiter: 'jupiter.webp',
+    Saturn: 'saturn.webp',
+  };
+
+  let hiResGeneration = 0;
+  let activeHiRes: { textures: THREE.Texture[]; revert: () => void } | null = null;
+
+  function disposeActiveHiRes() {
+    if (!activeHiRes) return;
+    activeHiRes.revert();
+    for (const tex of activeHiRes.textures) tex.dispose();
+    activeHiRes = null;
+  }
+
+  async function swapInHiRes(entry: (typeof planetMeshes)[number]) {
+    if (!HIRES_AVAILABLE.has(entry.name)) return;
+    disposeActiveHiRes();
+    const generation = ++hiResGeneration;
+    const material = entry.mesh.material as THREE.MeshStandardMaterial;
+    const stillCurrent = () => generation === hiResGeneration;
+
+    if (entry.name === 'Earth') {
+      const [daymap, nightmap, cloudsTex, specularSrc] = await Promise.all([
+        loadTextureFrom(HIRES_TEXTURE_BASE + 'earth_daymap.webp', SRGB),
+        loadTextureFrom(HIRES_TEXTURE_BASE + 'earth_nightmap.webp', SRGB),
+        loadTextureFrom(HIRES_TEXTURE_BASE + 'earth_clouds.webp', SRGB),
+        loadTextureFrom(HIRES_TEXTURE_BASE + 'earth_specular.webp', LINEAR),
+      ]);
+      const roughnessMap = invertToRoughnessMap(specularSrc);
+      specularSrc.dispose(); // only the inverted copy is kept resident
+      if (!stillCurrent()) {
+        [daymap, nightmap, cloudsTex, roughnessMap].forEach((t) => t.dispose());
+        return;
+      }
+
+      const prevMap = material.map;
+      const prevEmissiveMap = material.emissiveMap;
+      const prevRoughnessMap = material.roughnessMap;
+      material.map = daymap;
+      material.emissiveMap = nightmap;
+      material.roughnessMap = roughnessMap;
+      material.needsUpdate = true;
+
+      const cloudsMaterial = entry.clouds?.material as THREE.MeshStandardMaterial | undefined;
+      const prevCloudsMap = cloudsMaterial?.map ?? null;
+      if (cloudsMaterial) {
+        cloudsMaterial.map = cloudsTex;
+        cloudsMaterial.alphaMap = cloudsTex;
+        cloudsMaterial.needsUpdate = true;
+      }
+
+      activeHiRes = {
+        textures: [daymap, nightmap, roughnessMap, cloudsTex],
+        revert: () => {
+          material.map = prevMap ?? null;
+          material.emissiveMap = prevEmissiveMap ?? null;
+          material.roughnessMap = prevRoughnessMap ?? null;
+          material.needsUpdate = true;
+          if (cloudsMaterial) {
+            cloudsMaterial.map = prevCloudsMap;
+            cloudsMaterial.alphaMap = prevCloudsMap;
+            cloudsMaterial.needsUpdate = true;
+          }
+        },
+      };
+      return;
+    }
+
+    const file = HIRES_PLANET_FILE[entry.name];
+    if (!file) return;
+    const tex = await loadTextureFrom(HIRES_TEXTURE_BASE + file, SRGB);
+    if (!stillCurrent()) {
+      tex.dispose();
+      return;
+    }
+    const prevMap = material.map;
+    material.map = tex;
+    material.needsUpdate = true;
+    const textures = [tex];
+
+    const ringMaterial = entry.ring?.material as THREE.MeshStandardMaterial | undefined;
+    let prevRingMap: THREE.Texture | null = null;
+    if (entry.name === 'Saturn' && ringMaterial) {
+      const ringTex = await loadTextureFrom(HIRES_TEXTURE_BASE + 'saturn_ring.webp', SRGB);
+      if (stillCurrent()) {
+        prevRingMap = ringMaterial.map;
+        ringMaterial.map = ringTex;
+        ringMaterial.alphaMap = ringTex;
+        ringMaterial.needsUpdate = true;
+        textures.push(ringTex);
+      } else {
+        ringTex.dispose();
+      }
+    }
+
+    activeHiRes = {
+      textures,
+      revert: () => {
+        material.map = prevMap ?? null;
+        material.needsUpdate = true;
+        if (ringMaterial && prevRingMap !== null) {
+          ringMaterial.map = prevRingMap;
+          ringMaterial.alphaMap = prevRingMap;
+          ringMaterial.needsUpdate = true;
+        }
+      },
+    };
   }
 
   type FollowPhase = 'none' | 'entering' | 'following' | 'exiting';
@@ -727,6 +862,12 @@ async function main() {
     followPhase = 'entering';
     followHudEl.hidden = false;
     followHudLabelEl.textContent = target.label;
+
+    if (target.planetEntry) {
+      swapInHiRes(target.planetEntry);
+    } else {
+      disposeActiveHiRes();
+    }
   }
 
   function stopFollow() {
@@ -735,6 +876,7 @@ async function main() {
     followTransitionFromPos.copy(camera.position);
     followTransitionFromTarget.copy(controls.target);
     followPhase = 'exiting';
+    disposeActiveHiRes();
   }
 
   followExitBtnEl.addEventListener('click', stopFollow);
@@ -819,6 +961,7 @@ async function main() {
           label: planetHit.name,
           getPosition: () => stateAt(planetHit.elements, simJd),
           viewDistance: (PLANET_RADIUS[planetHit.name] ?? 0.05) * 7,
+          planetEntry: planetHit,
         }),
       );
       return;
