@@ -597,7 +597,7 @@ async function main() {
     new THREE.Vector2(window.innerWidth, window.innerHeight),
     1.1, // strength
     0.55, // radius
-    0.15, // threshold
+    0.75, // threshold (was 0.15 -- see Phase 4 note below)
   );
   bloomComposer.addPass(bloomPass);
 
