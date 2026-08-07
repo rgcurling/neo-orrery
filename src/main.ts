@@ -1090,6 +1090,68 @@ async function main() {
     );
   }
 
+  // Each shows the inspector + wires its Follow button for one body. Shared
+  // between click-to-inspect (below) and the "jump to" picker, so there's
+  // exactly one way each body's inspector gets built rather than two
+  // (in-3D click and picker) drifting out of sync over time.
+  function showSunInspector() {
+    inspectorEl.hidden = false;
+    inspectorEl.innerHTML =
+      `<h3>Sun</h3><div>Sol, G-type main-sequence star.</div>` +
+      `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+    inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
+      startFollow({ label: 'the Sun', getPosition: () => ({ x: 0, y: 0, z: 0 }), viewDistance: SUN_RADIUS * 5 }),
+    );
+  }
+
+  function showPlanetInspector(planetHit: (typeof planetMeshes)[number]) {
+    inspectorEl.hidden = false;
+    inspectorEl.innerHTML =
+      `<h3>${planetHit.name}</h3><dl>` +
+      formatElements(planetHit.elements)
+        .split('\n')
+        .map((line) => {
+          const [k, v] = line.split(/:\s(.+)/);
+          return `<dt>${k}</dt><dd>${v}</dd>`;
+        })
+        .join('') +
+      `</dl>` +
+      `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+    inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
+      startFollow({
+        label: planetHit.name,
+        getPosition: () => stateAt(planetHit.elements, simJd),
+        viewDistance: (PLANET_RADIUS[planetHit.name] ?? 0.05) * 7,
+        planetEntry: planetHit,
+      }),
+    );
+  }
+
+  function showFeaturedInspector(featuredHit: (typeof featuredAsteroids)[number]) {
+    const { neo, radius } = featuredHit;
+    inspectorEl.hidden = false;
+    inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+    inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
+      startFollow({
+        label: neo.name ?? neo.fullName,
+        getPosition: () => stateAt(neo.elements, simJd),
+        viewDistance: radius * 7,
+      }),
+    );
+  }
+
+  function showSwarmNeoInspector(neo: NeoRecord) {
+    inspectorEl.hidden = false;
+    inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+    inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
+      startFollow({
+        label: neo.name ?? neo.fullName,
+        getPosition: () => stateAt(neo.elements, simJd),
+        viewDistance: NEO_RADIUS * 8,
+      }),
+    );
+  }
+
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   renderer.domElement.addEventListener('click', (event) => {
@@ -1112,64 +1174,61 @@ async function main() {
 
     const hit = hits[0];
     if (hit.object === sun) {
-      inspectorEl.hidden = false;
-      inspectorEl.innerHTML =
-        `<h3>Sun</h3><div>Sol, G-type main-sequence star.</div>` +
-        `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
-      inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
-        startFollow({ label: 'the Sun', getPosition: () => ({ x: 0, y: 0, z: 0 }), viewDistance: SUN_RADIUS * 5 }),
-      );
+      showSunInspector();
       return;
     }
     const planetHit = planetMeshes.find((p) => p.mesh === hit.object);
     if (planetHit) {
-      inspectorEl.hidden = false;
-      inspectorEl.innerHTML =
-        `<h3>${planetHit.name}</h3><dl>` +
-        formatElements(planetHit.elements)
-          .split('\n')
-          .map((line) => {
-            const [k, v] = line.split(/:\s(.+)/);
-            return `<dt>${k}</dt><dd>${v}</dd>`;
-          })
-          .join('') +
-        `</dl>` +
-        `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
-      inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
-        startFollow({
-          label: planetHit.name,
-          getPosition: () => stateAt(planetHit.elements, simJd),
-          viewDistance: (PLANET_RADIUS[planetHit.name] ?? 0.05) * 7,
-          planetEntry: planetHit,
-        }),
-      );
+      showPlanetInspector(planetHit);
       return;
     }
     const featuredHit = featuredAsteroids.find((f) => f.pickMesh === hit.object);
     if (featuredHit) {
-      const { neo, radius } = featuredHit;
-      inspectorEl.hidden = false;
-      inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
-      inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
-        startFollow({
-          label: neo.name ?? neo.fullName,
-          getPosition: () => stateAt(neo.elements, simJd),
-          viewDistance: radius * 7,
-        }),
-      );
+      showFeaturedInspector(featuredHit);
       return;
     }
     if (hit.object === neoMesh && hit.instanceId !== undefined) {
-      const neo = neos[hit.instanceId];
-      inspectorEl.hidden = false;
-      inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
-      inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
-        startFollow({
-          label: neo.name ?? neo.fullName,
-          getPosition: () => stateAt(neo.elements, simJd),
-          viewDistance: NEO_RADIUS * 8,
-        }),
-      );
+      showSwarmNeoInspector(neos[hit.instanceId]);
+    }
+  });
+
+  // --- Jump-to picker: the ~29 known-interesting bodies (Sun, planets,
+  // featured asteroids) are genuinely hard to click in 3D -- tiny targets
+  // among 42k instanced dots. A plain <select> sidesteps that entirely, and
+  // gets typeahead search for free from the browser.
+  const jumpToEl = document.getElementById('jump-to') as HTMLSelectElement;
+  {
+    const sunOption = new Option('☉ Sun', 'sun');
+    jumpToEl.add(sunOption);
+
+    const planetGroup = document.createElement('optgroup');
+    planetGroup.label = 'Planets';
+    for (const p of planetMeshes) planetGroup.appendChild(new Option(p.name, `planet:${p.name}`));
+    jumpToEl.add(planetGroup);
+
+    const featuredGroup = document.createElement('optgroup');
+    featuredGroup.label = 'Featured asteroids';
+    for (const f of featuredAsteroids) {
+      featuredGroup.appendChild(new Option(f.neo.name ?? f.neo.fullName, `featured:${f.neo.designation}`));
+    }
+    jumpToEl.add(featuredGroup);
+  }
+  jumpToEl.addEventListener('change', () => {
+    const value = jumpToEl.value;
+    jumpToEl.selectedIndex = 0; // reset to placeholder -- this is a jump action, not a persistent selection
+    if (!value) return;
+    if (value === 'sun') {
+      showSunInspector();
+      return;
+    }
+    if (value.startsWith('planet:')) {
+      const planetHit = planetMeshes.find((p) => p.name === value.slice('planet:'.length));
+      if (planetHit) showPlanetInspector(planetHit);
+      return;
+    }
+    if (value.startsWith('featured:')) {
+      const featuredHit = featuredAsteroids.find((f) => f.neo.designation === value.slice('featured:'.length));
+      if (featuredHit) showFeaturedInspector(featuredHit);
     }
   });
 
