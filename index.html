@@ -77,6 +77,20 @@
       #speed {
         flex: 1;
       }
+      #jump-to {
+        width: 100%;
+        font-family: inherit;
+        font-size: 12px;
+        background: rgba(140, 190, 255, 0.1);
+        color: #cfe8ff;
+        border: 1px solid rgba(140, 190, 255, 0.35);
+        border-radius: 4px;
+        padding: 5px 6px;
+        cursor: pointer;
+      }
+      #jump-to:hover {
+        background: rgba(140, 190, 255, 0.18);
+      }
       #inspector {
         top: 12px;
         right: 12px;
@@ -219,6 +233,14 @@
       <div class="row">
         <label><input id="toggle-neo-orbits" type="checkbox" /> NEO orbits (dense)</label>
         <label><input id="toggle-labels" type="checkbox" /> Labels</label>
+      </div>
+      <div class="row">
+        <label><input id="toggle-swarm-brightness" type="checkbox" /> Full swarm brightness</label>
+      </div>
+      <div class="row">
+        <select id="jump-to">
+          <option value="" selected disabled>Jump to…</option>
+        </select>
       </div>
     </div>
 
