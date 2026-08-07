@@ -227,3 +227,11 @@ that matter at NEO-population scale (tens of thousands of objects):
 - All NEO bodies share a single `InstancedMesh`; positions are written into
   the instance matrix array every frame (`instanceMatrix.needsUpdate = true`),
   never individual meshes.
+
+## Attribution
+
+Planet, cloud, and ring textures (`public/textures/`) are the 2K set from
+[Solar System Scope](https://www.solarsystemscope.com/textures), licensed
+under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Re-encoded
+from the source JPG/PNG/TIFF to WebP (quality 85) to keep the committed
+asset size down; no other changes made.
