@@ -49,6 +49,20 @@ const NEO_RADIUS = 0.008;
 const NEO_BASE_COLOR = new THREE.Color(0x6f93b8);
 const NEO_FLASH_COLOR = new THREE.Color(0xff3b3b);
 const SENTRY_SCALE = 3; // Sentry-tracked NEOs render larger so they're findable in the haze
+// Dimmed by default so featured asteroids and Sentry risk objects pop
+// instead of competing with 42k background dots; full brightness available
+// via the "Full swarm brightness" toggle. Matters most at close zoom, where
+// individual instances are actually resolvable -- confirmed by testing that
+// at god's-eye and medium zoom, the swarm's contribution to the visible
+// "glow" near the Sun is negligible next to the Sun's own bloom (hiding the
+// instanced mesh entirely produced byte-identical screenshots at multiple
+// zoom levels). Controlled via material.color, not material.opacity:
+// three.js's AdditiveBlending uses gl.blendFunc(ONE, ONE) at the GPU level,
+// which ignores source alpha entirely, so opacity has zero visual effect on
+// an additive material -- confirmed via the three.js source after opacity
+// swings of 10x+ produced no pixel difference in testing.
+const NEO_HAZE_BRIGHTNESS_DIM = 0.4;
+const NEO_HAZE_BRIGHTNESS_FULL = 1;
 
 // Real axial tilt (obliquity to orbit, degrees) and sidereal rotation period
 // (days; negative = retrograde). Both applied as a deterministic function of
@@ -329,6 +343,7 @@ async function main() {
   const speedLabelEl = document.getElementById('speed-label')!;
   const toggleNeoOrbitsEl = document.getElementById('toggle-neo-orbits') as HTMLInputElement;
   const toggleLabelsEl = document.getElementById('toggle-labels') as HTMLInputElement;
+  const toggleSwarmBrightnessEl = document.getElementById('toggle-swarm-brightness') as HTMLInputElement;
   const inspectorEl = document.getElementById('inspector')!;
   const bannerEl = document.getElementById('close-approach-banner')!;
   const labelsEl = document.getElementById('labels')!;
@@ -552,10 +567,9 @@ async function main() {
   // Additive + low opacity so the NEO cloud reads as a haze that thickens
   // where orbits cluster, rather than a scatter of hard dots.
   const neoMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
+    color: new THREE.Color().setScalar(NEO_HAZE_BRIGHTNESS_DIM),
     vertexColors: true,
     transparent: true,
-    opacity: 0.55,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
@@ -838,6 +852,11 @@ async function main() {
 
   toggleLabelsEl.addEventListener('change', () => {
     labelsEl.classList.toggle('hidden', !toggleLabelsEl.checked);
+  });
+
+  toggleSwarmBrightnessEl.addEventListener('change', () => {
+    const brightness = toggleSwarmBrightnessEl.checked ? NEO_HAZE_BRIGHTNESS_FULL : NEO_HAZE_BRIGHTNESS_DIM;
+    neoMaterial.color.setScalar(brightness);
   });
 
   // --- Follow cam: locks onto a selected body with an eased transition in
