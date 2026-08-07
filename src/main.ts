@@ -49,6 +49,84 @@ const NEO_BASE_COLOR = new THREE.Color(0x6f93b8);
 const NEO_FLASH_COLOR = new THREE.Color(0xff3b3b);
 const SENTRY_SCALE = 3; // Sentry-tracked NEOs render larger so they're findable in the haze
 
+// Real axial tilt (obliquity to orbit, degrees) and sidereal rotation period
+// (days; negative = retrograde). Both applied as a deterministic function of
+// simJd (like orbital position), never an accumulated per-frame delta, so
+// scrubbing the timeline snaps rotation to the correct angle instead of
+// depending on playback history.
+const PLANET_TILT_DEG: Record<string, number> = {
+  Mercury: 0.034,
+  Venus: 177.4,
+  Earth: 23.44,
+  Mars: 25.19,
+  Jupiter: 3.13,
+  Saturn: 26.73,
+  Uranus: 97.77,
+  Neptune: 28.32,
+};
+const PLANET_ROTATION_DAYS: Record<string, number> = {
+  Mercury: 58.646,
+  Venus: -243.025,
+  Earth: 0.99727,
+  Mars: 1.02595,
+  Jupiter: 0.41354,
+  Saturn: 0.44401,
+  Uranus: -0.71833,
+  Neptune: 0.6713,
+};
+const EARTH_CLOUDS_ROTATION_DAYS = 5; // faster drift than the surface, for visual life
+
+const TEXTURE_BASE = `${import.meta.env.BASE_URL}textures/`;
+const textureLoader = new THREE.TextureLoader();
+
+function loadTexture(file: string, colorSpace: THREE.ColorSpace): Promise<THREE.Texture> {
+  return textureLoader.loadAsync(TEXTURE_BASE + file).then((tex) => {
+    tex.colorSpace = colorSpace;
+    return tex;
+  });
+}
+
+/** One-time runtime invert for the specular map: bright (ocean) in the
+ * source should mean LOW roughness (shiny), but roughnessMap reads its
+ * green channel directly, so the source needs inverting first. No build
+ * tool available for this (no ImageMagick/PIL in this environment), and a
+ * 2048x1024 canvas invert is cheap and one-shot, so it happens here instead
+ * of at fetch time. */
+function invertToRoughnessMap(source: THREE.Texture): THREE.Texture {
+  const img = source.image as HTMLImageElement;
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d')!;
+  ctx.drawImage(img, 0, 0);
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 255 - data[i];
+    data[i + 1] = 255 - data[i + 1];
+    data[i + 2] = 255 - data[i + 2];
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return new THREE.CanvasTexture(canvas);
+}
+
+/** RingGeometry's default UVs map u tangentially (around the ring) -- wrong
+ * for a texture whose gradient runs radially. Rewrites u to normalized
+ * radius (0 at innerRadius, 1 at outerRadius) so the ring texture reads
+ * correctly instead of smearing into nonsense. */
+function fixRingUVs(geometry: THREE.RingGeometry, innerRadius: number, outerRadius: number): void {
+  const pos = geometry.attributes.position;
+  const uv = geometry.attributes.uv;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const radius = Math.sqrt(v.x * v.x + v.y * v.y);
+    const u = (radius - innerRadius) / (outerRadius - innerRadius);
+    uv.setXY(i, u, 0.5);
+  }
+  uv.needsUpdate = true;
+}
+
 // Palermo Scale risk tiers, per JPL's own interpretation of the scale:
 // PS < -2 no likely consequence, -2..0 merits careful monitoring, >=0 merits
 // concern. Colors are the app's fixed status palette (good/serious/critical) --
@@ -264,37 +342,137 @@ async function main() {
   sun.layers.enable(BLOOM_SCENE); // blooms hard
   scene.add(sun);
 
-  const planetMeshes: { name: string; mesh: THREE.Mesh; elements: OrbitalElements; label: HTMLDivElement }[] =
-    PLANETS.map((planet) => {
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(PLANET_RADIUS[planet.name] ?? 0.05, 24, 24),
-        new THREE.MeshStandardMaterial({ color: planet.color, roughness: 0.65, metalness: 0.05 }),
-      );
+  statsEl.textContent = 'Loading textures...';
+  const SRGB = THREE.SRGBColorSpace;
+  const LINEAR = THREE.NoColorSpace;
+  const PLANET_TEXTURE_FILE: Record<string, string> = {
+    Mercury: 'mercury.webp',
+    Venus: 'venus.webp',
+    Mars: 'mars.webp',
+    Jupiter: 'jupiter.webp',
+    Saturn: 'saturn.webp',
+    Uranus: 'uranus.webp',
+    Neptune: 'neptune.webp',
+  };
+  const [surfaceTextures, earthDaymap, earthNightmap, earthCloudsTex, earthSpecularSrc, saturnRingTex] =
+    await Promise.all([
+      Promise.all(
+        Object.entries(PLANET_TEXTURE_FILE).map(async ([name, file]) => [name, await loadTexture(file, SRGB)] as const),
+      ).then((entries) => new Map(entries)),
+      loadTexture('earth_daymap.webp', SRGB),
+      loadTexture('earth_nightmap.webp', SRGB),
+      loadTexture('earth_clouds.webp', SRGB),
+      loadTexture('earth_specular.webp', LINEAR),
+      loadTexture('saturn_ring.webp', SRGB),
+    ]);
+  const earthRoughnessMap = invertToRoughnessMap(earthSpecularSrc);
 
-      // Faint glow proxy: bloom-layer only (never in the base render), so
-      // planets get a soft halo without blowing out the crisp planet sphere.
-      const glowProxy = new THREE.Mesh(
-        new THREE.SphereGeometry((PLANET_RADIUS[planet.name] ?? 0.05) * 1.8, 12, 12),
-        new THREE.MeshBasicMaterial({
-          color: planet.color,
+  const planetMeshes: {
+    name: string;
+    group: THREE.Group;
+    mesh: THREE.Mesh;
+    clouds: THREE.Mesh | null;
+    elements: OrbitalElements;
+    label: HTMLDivElement;
+    rotationDays: number;
+  }[] = PLANETS.map((planet) => {
+    const radius = PLANET_RADIUS[planet.name] ?? 0.05;
+    const isEarth = planet.name === 'Earth';
+
+    const material = isEarth
+      ? new THREE.MeshStandardMaterial({
+          map: earthDaymap,
+          roughnessMap: earthRoughnessMap,
+          roughness: 1,
+          metalness: 0.1,
+          emissiveMap: earthNightmap,
+          emissive: 0xffffff,
+          emissiveIntensity: 1.4,
+        })
+      : new THREE.MeshStandardMaterial({
+          map: surfaceTextures.get(planet.name) ?? null,
+          color: surfaceTextures.has(planet.name) ? 0xffffff : planet.color,
+          roughness: 0.75,
+          metalness: 0.05,
+        });
+
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(radius, 48, 48), material);
+
+    // Faint glow proxy: bloom-layer only (never in the base render), so
+    // planets get a soft halo without blowing out the crisp planet sphere.
+    const glowProxy = new THREE.Mesh(
+      new THREE.SphereGeometry(radius * 1.8, 12, 12),
+      new THREE.MeshBasicMaterial({
+        color: planet.color,
+        transparent: true,
+        opacity: 0.35,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    glowProxy.layers.set(BLOOM_SCENE);
+    mesh.add(glowProxy);
+
+    // Axial tilt lives on a parent group so it doesn't get tangled up with
+    // the per-frame spin on `mesh` -- the group carries orbital position +
+    // fixed obliquity, `mesh` (and clouds/rings, as siblings) just rotate
+    // around the group's already-tilted local Y each frame.
+    const group = new THREE.Group();
+    const tiltRad = (PLANET_TILT_DEG[planet.name] ?? 0) * (Math.PI / 180);
+    group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), tiltRad);
+    group.add(mesh);
+
+    let clouds: THREE.Mesh | null = null;
+    if (isEarth) {
+      clouds = new THREE.Mesh(
+        new THREE.SphereGeometry(radius * 1.02, 48, 48),
+        new THREE.MeshStandardMaterial({
+          map: earthCloudsTex,
+          alphaMap: earthCloudsTex,
           transparent: true,
-          opacity: 0.35,
-          blending: THREE.AdditiveBlending,
           depthWrite: false,
+          roughness: 1,
         }),
       );
-      glowProxy.layers.set(BLOOM_SCENE);
-      mesh.add(glowProxy);
+      group.add(clouds);
+    }
 
-      scene.add(mesh);
+    if (planet.name === 'Saturn') {
+      const innerRadius = radius * 1.3;
+      const outerRadius = radius * 2.3;
+      const ringGeometry = new THREE.RingGeometry(innerRadius, outerRadius, 128, 1);
+      fixRingUVs(ringGeometry, innerRadius, outerRadius);
+      const ring = new THREE.Mesh(
+        ringGeometry,
+        new THREE.MeshStandardMaterial({
+          map: saturnRingTex,
+          alphaMap: saturnRingTex,
+          transparent: true,
+          side: THREE.DoubleSide,
+          roughness: 0.9,
+        }),
+      );
+      ring.rotation.x = Math.PI / 2; // RingGeometry is built in the XY plane; lay it flat on the equator
+      group.add(ring);
+    }
 
-      const label = document.createElement('div');
-      label.className = 'planet-label';
-      label.textContent = planet.name;
-      labelsEl.appendChild(label);
+    scene.add(group);
 
-      return { name: planet.name, mesh, elements: planet.elements, label };
-    });
+    const label = document.createElement('div');
+    label.className = 'planet-label';
+    label.textContent = planet.name;
+    labelsEl.appendChild(label);
+
+    return {
+      name: planet.name,
+      group,
+      mesh,
+      clouds,
+      elements: planet.elements,
+      label,
+      rotationDays: PLANET_ROTATION_DAYS[planet.name] ?? 1,
+    };
+  });
 
   const planetOrbits = new THREE.LineSegments(
     buildOrbitLineGeometry(PLANETS.map((p) => p.elements)),
@@ -752,11 +930,20 @@ async function main() {
     const simDate = jdToDate(simJd);
     dateReadoutEl.textContent = simDate.toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
 
-    for (const { mesh, elements, label } of planetMeshes) {
+    for (const { group, mesh, clouds, elements, label, rotationDays } of planetMeshes) {
       const p = stateAt(elements, simJd);
-      mesh.position.set(p.x, p.y, p.z);
+      group.position.set(p.x, p.y, p.z);
+
+      // Spin (and cloud drift) is a deterministic function of simJd, same as
+      // orbital position -- scrubbing the timeline snaps to the right angle
+      // instead of depending on how playback got there.
+      mesh.rotation.y = ((simJd - elements.epoch) / rotationDays) * Math.PI * 2;
+      if (clouds) {
+        clouds.rotation.y = ((simJd - elements.epoch) / EARTH_CLOUDS_ROTATION_DAYS) * Math.PI * 2;
+      }
+
       if (!labelsEl.classList.contains('hidden')) {
-        projected.copy(mesh.position).project(camera);
+        projected.copy(group.position).project(camera);
         label.style.left = `${((projected.x + 1) / 2) * window.innerWidth}px`;
         label.style.top = `${((1 - projected.y) / 2) * window.innerHeight}px`;
         label.style.display = projected.z < 1 ? 'block' : 'none';
