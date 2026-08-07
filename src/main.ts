@@ -13,6 +13,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PLANETS } from './planets.js';
 import { stateAt, dateToJD, jdToDate, type Vec3 } from './orbit.js';
 import type { CloseApproach, NeoRecord, OrbitalElements, SentryRecord } from './types.js';
@@ -149,6 +150,54 @@ function sentryTierFor(psCum: number): SentryTier {
   if (psCum >= 0) return SENTRY_TIERS[0];
   if (psCum >= -2) return SENTRY_TIERS[1];
   return SENTRY_TIERS[2];
+}
+
+// --- Featured asteroids: the largest few dozen NEOs by known diameter get
+// pulled out of the anonymous swarm as individually modeled, clickable
+// bodies -- real shape+texture for 433 Eros (the only one in this dataset
+// ever actually visited by a spacecraft), a deformed-icosahedron "rock" with
+// a generic cratered-surface texture for the rest. Sized on a compressed
+// (sqrt) scale, deliberately capped below Mercury's radius: true 1:1 scale
+// would make even the largest (Ganymed, ~38 km) an invisible speck next to
+// any planet, so this reads as "small but findable," never "planet-sized."
+const FEATURED_ASTEROID_COUNT = 20;
+const FEATURED_MIN_RADIUS = 0.012;
+const FEATURED_MAX_RADIUS = 0.028; // stays under Mercury's 0.035
+const FEATURED_SPIN_HOURS_MIN = 4;
+const FEATURED_SPIN_HOURS_MAX = 11;
+
+/** Deterministic hash for turning a designation into a stable pseudo-random
+ * value -- so each generic asteroid gets its own consistent bump pattern,
+ * spin rate, and color tint across reloads, without a seeded PRNG library. */
+function hashString(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0) / 0xffffffff; // -> [0, 1)
+}
+
+/** A lumpy, non-spherical "rock" shape via smooth low-frequency trig
+ * displacement in spherical-angle space (not per-vertex hash noise, which
+ * would look spiky/uncorrelated between neighboring vertices). */
+function buildIrregularAsteroidGeometry(radius: number, seed: number): THREE.BufferGeometry {
+  const geometry = new THREE.IcosahedronGeometry(radius, 3);
+  const pos = geometry.attributes.position;
+  const v = new THREE.Vector3();
+  const s = seed * 37.1;
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const theta = Math.atan2(v.z, v.x);
+    const phi = Math.acos(THREE.MathUtils.clamp(v.y / radius, -1, 1));
+    let bump = 0;
+    bump += Math.sin(theta * 3 + s) * Math.cos(phi * 2 + s) * 0.5;
+    bump += Math.sin(theta * 5 + s * 2.1) * Math.cos(phi * 4 + s * 1.3) * 0.25;
+    bump += Math.sin(theta * 9 + s * 0.7) * Math.cos(phi * 7 + s * 3.3) * 0.125;
+    v.multiplyScalar(1 + bump * 0.28);
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geometry.computeVertexNormals();
+  return geometry;
 }
 
 /** Position on an orbit's fixed ellipse at mean anomaly M, independent of time. */
@@ -540,11 +589,13 @@ async function main() {
     neoMesh.setColorAt(i, NEO_BASE_COLOR);
   }
 
-  // Impact-risk overlay: Sentry-tracked objects get their Palermo-scale tier
-  // color instead of the default swarm blue, and render larger so ~2k objects
-  // out of ~42k are actually findable. sentryRestColor remembers each tinted
-  // instance's resting color so close-approach flashing (below) can revert to
-  // the right color instead of stomping the tier tint back to default blue.
+  // Impact-risk overlay: only Sentry objects that actually merit attention
+  // (Palermo scale >= -2 -- "serious" or "critical") get tinted and enlarged.
+  // The other ~99.9% ("good", no likely consequence) blend back into the
+  // ordinary swarm -- highlighting all 2,175 tracked objects made "tracked
+  // by Sentry" look like a risk signal on its own, when for nearly all of
+  // them it isn't. sentryRestColor remembers each tinted instance's resting
+  // color so close-approach flashing (below) can revert to the right color.
   const sentryRestColor = new Map<number, THREE.Color>();
   const neoScale = new Float32Array(neos.length).fill(1);
   const sentryTierCounts = new Map<string, number>();
@@ -552,10 +603,11 @@ async function main() {
     const idx = designationToIndex.get(record.designation);
     if (idx === undefined) continue;
     const tier = sentryTierFor(record.psCum);
+    sentryTierCounts.set(tier.key, (sentryTierCounts.get(tier.key) ?? 0) + 1);
+    if (tier.key === 'good') continue;
     neoMesh.setColorAt(idx, tier.color);
     sentryRestColor.set(idx, tier.color);
     neoScale[idx] = SENTRY_SCALE;
-    sentryTierCounts.set(tier.key, (sentryTierCounts.get(tier.key) ?? 0) + 1);
   }
 
   neoMesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
@@ -566,11 +618,100 @@ async function main() {
     `<h3>Impact risk (Sentry) — ${sentryRecords.length.toLocaleString()} tracked</h3>` +
     SENTRY_TIERS.map((tier) => {
       const count = sentryTierCounts.get(tier.key) ?? 0;
+      const highlighted = tier.key !== 'good';
+      const swatchStyle = highlighted
+        ? `background:#${tier.color.getHexString()}`
+        : `background:transparent;border:1px solid #556677`;
       return (
-        `<div class="legend-row"><span class="swatch" style="background:#${tier.color.getHexString()}"></span>` +
-        `${tier.label} <span class="legend-count">(${count})</span></div>`
+        `<div class="legend-row"><span class="swatch" style="${swatchStyle}"></span>` +
+        `${tier.label} <span class="legend-count">(${count}${highlighted ? '' : ', not highlighted'})</span></div>`
       );
     }).join('');
+
+  // --- Featured asteroids: the largest known-diameter NEOs, pulled out of
+  // the instanced swarm as individually modeled bodies. Real shape+texture
+  // for 433 Eros (NASA/NEAR Shoemaker, the only one here ever visited by a
+  // spacecraft); a generic deformed "rock" for the rest -- lightcurve-only
+  // shape data exists for some of them, but that's a rough convex silhouette
+  // with no actual surface imagery, so claiming a specific texture for it
+  // would be faking detail we don't have.
+  statsEl.textContent = 'Loading featured asteroids...';
+  const featuredCandidates = neos
+    .filter((n) => n.diameterKm !== null)
+    .sort((a, b) => b.diameterKm! - a.diameterKm!)
+    .slice(0, FEATURED_ASTEROID_COUNT);
+  const featuredDiameters = featuredCandidates.map((n) => n.diameterKm!);
+  const minFeaturedD = Math.min(...featuredDiameters);
+  const maxFeaturedD = Math.max(...featuredDiameters);
+  function featuredRadiusFor(diameterKm: number): number {
+    if (maxFeaturedD === minFeaturedD) return (FEATURED_MIN_RADIUS + FEATURED_MAX_RADIUS) / 2;
+    const t = (Math.sqrt(diameterKm) - Math.sqrt(minFeaturedD)) / (Math.sqrt(maxFeaturedD) - Math.sqrt(minFeaturedD));
+    return FEATURED_MIN_RADIUS + t * (FEATURED_MAX_RADIUS - FEATURED_MIN_RADIUS);
+  }
+
+  const [asteroidGenericTex, erosGltf] = await Promise.all([
+    loadTexture('asteroid_generic.webp', SRGB),
+    new GLTFLoader().loadAsync(`${import.meta.env.BASE_URL}models/eros.glb`),
+  ]);
+
+  const featuredAsteroids: {
+    neo: NeoRecord;
+    mesh: THREE.Object3D;
+    pickMesh: THREE.Object3D;
+    radius: number;
+    spinDays: number;
+    label: HTMLDivElement;
+  }[] = featuredCandidates.map((neo) => {
+    const radius = featuredRadiusFor(neo.diameterKm!);
+    const seed = hashString(neo.designation);
+    const isEros = neo.designation === '433';
+
+    let body: THREE.Object3D;
+    let pickMesh: THREE.Object3D;
+    if (isEros) {
+      const erosScene = erosGltf.scene.clone(true);
+      const box = new THREE.Box3().setFromObject(erosScene);
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      erosScene.scale.setScalar((radius * 2) / maxDim);
+      body = erosScene;
+      // Raycasting uses non-recursive intersectObjects (see click handler),
+      // matching every other target in that list -- so the actual leaf mesh
+      // inside the glTF scene graph has to be the target, not the group.
+      pickMesh = body;
+      body.traverse((child) => {
+        if ((child as THREE.Mesh).isMesh) pickMesh = child;
+      });
+    } else {
+      const tint = new THREE.Color().setHSL(0.08 + seed * 0.06, 0.15 + seed * 0.1, 0.42 + seed * 0.12);
+      body = new THREE.Mesh(
+        buildIrregularAsteroidGeometry(radius, seed * 100),
+        new THREE.MeshStandardMaterial({ map: asteroidGenericTex, color: tint, roughness: 0.95, metalness: 0.05 }),
+      );
+      pickMesh = body;
+    }
+    // Random but deterministic tumble axis + orientation so they don't all
+    // spin in visual lockstep.
+    body.rotation.set(seed * 6.28, seed * 3.14, seed * 9.42);
+    scene.add(body);
+
+    const label = document.createElement('div');
+    label.className = 'planet-label';
+    label.textContent = neo.name ?? neo.fullName;
+    labelsEl.appendChild(label);
+
+    const idx = designationToIndex.get(neo.designation);
+    if (idx !== undefined) neoScale[idx] = 0; // hide from the instanced swarm -- this mesh replaces it
+
+    return {
+      neo,
+      mesh: body,
+      pickMesh,
+      radius,
+      spinDays: (FEATURED_SPIN_HOURS_MIN + seed * (FEATURED_SPIN_HOURS_MAX - FEATURED_SPIN_HOURS_MIN)) / 24,
+      label,
+    };
+  });
 
   // NEO orbit lines: built lazily on first toggle-on, since 42k merged
   // ellipses is expensive to compute and nobody needs it by default.
@@ -916,6 +1057,39 @@ async function main() {
   }
 
   // --- Click-to-inspect ---
+  // Shared inspector body for any NeoRecord -- used for both an instanced-
+  // swarm hit and a featured-asteroid hit, which otherwise show identical
+  // information (designation/H/diameter/PHA/elements, plus Sentry fields if
+  // tracked). Each caller appends its own Follow button, since getPosition
+  // and viewDistance differ between the two.
+  function buildNeoInspectorHtml(neo: NeoRecord): string {
+    const sentry = sentryByDesignation.get(neo.designation);
+    return (
+      `<h3>${neo.name ?? neo.fullName}</h3><dl>` +
+      `<dt>designation</dt><dd>${neo.designation}</dd>` +
+      (neo.h !== null ? `<dt>H</dt><dd>${neo.h}</dd>` : '') +
+      (neo.diameterKm !== null ? `<dt>diameter</dt><dd>${neo.diameterKm} km</dd>` : '') +
+      `<dt>PHA</dt><dd>${neo.pha ? 'yes' : 'no'}</dd>` +
+      formatElements(neo.elements)
+        .split('\n')
+        .map((line) => {
+          const [k, v] = line.split(/:\s(.+)/);
+          return `<dt>${k}</dt><dd>${v}</dd>`;
+        })
+        .join('') +
+      `</dl>` +
+      (sentry
+        ? `<h3 class="sentry-heading">Sentry — ${sentryTierFor(sentry.psCum).label}</h3><dl>` +
+          `<dt>PS (cum.)</dt><dd>${sentry.psCum.toFixed(2)}</dd>` +
+          `<dt>PS (max)</dt><dd>${sentry.psMax.toFixed(2)}</dd>` +
+          `<dt>impact prob.</dt><dd>${sentry.impactProbability.toExponential(2)}</dd>` +
+          `<dt>potential impacts</dt><dd>${sentry.potentialImpactCount}</dd>` +
+          `<dt>years</dt><dd>${sentry.yearRange}</dd>` +
+          `</dl>`
+        : '')
+    );
+  }
+
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
   renderer.domElement.addEventListener('click', (event) => {
@@ -924,7 +1098,12 @@ async function main() {
     pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(pointerNdc, camera);
 
-    const targets: THREE.Object3D[] = [sun, ...planetMeshes.map((p) => p.mesh), neoMesh];
+    const targets: THREE.Object3D[] = [
+      sun,
+      ...planetMeshes.map((p) => p.mesh),
+      ...featuredAsteroids.map((f) => f.pickMesh),
+      neoMesh,
+    ];
     const hits = raycaster.intersectObjects(targets, false);
     if (hits.length === 0) {
       inspectorEl.hidden = true;
@@ -966,34 +1145,24 @@ async function main() {
       );
       return;
     }
+    const featuredHit = featuredAsteroids.find((f) => f.pickMesh === hit.object);
+    if (featuredHit) {
+      const { neo, radius } = featuredHit;
+      inspectorEl.hidden = false;
+      inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+      inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
+        startFollow({
+          label: neo.name ?? neo.fullName,
+          getPosition: () => stateAt(neo.elements, simJd),
+          viewDistance: radius * 7,
+        }),
+      );
+      return;
+    }
     if (hit.object === neoMesh && hit.instanceId !== undefined) {
       const neo = neos[hit.instanceId];
-      const sentry = sentryByDesignation.get(neo.designation);
       inspectorEl.hidden = false;
-      inspectorEl.innerHTML =
-        `<h3>${neo.name ?? neo.fullName}</h3><dl>` +
-        `<dt>designation</dt><dd>${neo.designation}</dd>` +
-        (neo.h !== null ? `<dt>H</dt><dd>${neo.h}</dd>` : '') +
-        (neo.diameterKm !== null ? `<dt>diameter</dt><dd>${neo.diameterKm} km</dd>` : '') +
-        `<dt>PHA</dt><dd>${neo.pha ? 'yes' : 'no'}</dd>` +
-        formatElements(neo.elements)
-          .split('\n')
-          .map((line) => {
-            const [k, v] = line.split(/:\s(.+)/);
-            return `<dt>${k}</dt><dd>${v}</dd>`;
-          })
-          .join('') +
-        `</dl>` +
-        (sentry
-          ? `<h3 class="sentry-heading">Sentry — ${sentryTierFor(sentry.psCum).label}</h3><dl>` +
-            `<dt>PS (cum.)</dt><dd>${sentry.psCum.toFixed(2)}</dd>` +
-            `<dt>PS (max)</dt><dd>${sentry.psMax.toFixed(2)}</dd>` +
-            `<dt>impact prob.</dt><dd>${sentry.impactProbability.toExponential(2)}</dd>` +
-            `<dt>potential impacts</dt><dd>${sentry.potentialImpactCount}</dd>` +
-            `<dt>years</dt><dd>${sentry.yearRange}</dd>` +
-            `</dl>`
-          : '') +
-        `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
+      inspectorEl.innerHTML = buildNeoInspectorHtml(neo) + `<button id="inspector-follow-btn" type="button">Follow ▶</button>`;
       inspectorEl.querySelector('#inspector-follow-btn')!.addEventListener('click', () =>
         startFollow({
           label: neo.name ?? neo.fullName,
@@ -1087,6 +1256,21 @@ async function main() {
 
       if (!labelsEl.classList.contains('hidden')) {
         projected.copy(group.position).project(camera);
+        label.style.left = `${((projected.x + 1) / 2) * window.innerWidth}px`;
+        label.style.top = `${((1 - projected.y) / 2) * window.innerHeight}px`;
+        label.style.display = projected.z < 1 ? 'block' : 'none';
+      }
+    }
+
+    for (const { mesh, neo, spinDays, label } of featuredAsteroids) {
+      const p = stateAt(neo.elements, simJd);
+      mesh.position.set(p.x, p.y, p.z);
+      // Spin rate is a plausible generic range, not a real measured period
+      // (we don't have that data for most of these) -- visual life, not a claim.
+      mesh.rotation.y = ((simJd - neo.elements.epoch) / spinDays) * Math.PI * 2;
+
+      if (!labelsEl.classList.contains('hidden')) {
+        projected.copy(mesh.position).project(camera);
         label.style.left = `${((projected.x + 1) / 2) * window.innerWidth}px`;
         label.style.top = `${((1 - projected.y) / 2) * window.innerHeight}px`;
         label.style.display = projected.z < 1 ? 'block' : 'none';

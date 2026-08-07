@@ -12,10 +12,12 @@ Built with Vite + TypeScript + three.js, tested with vitest.
 
 |  |  |
 |---|---|
-| ![Wide view: Sun, planet orbit rings, and a close approach flashing red in the banner](docs/screenshots/overview.png) | ![Zoomed into the inner solar system: Mercury through Jupiter, NEO orbit lines, ecliptic-dimmed haze](docs/screenshots/inner-system.png) |
+| ![Wide view: Sun, textured planet orbit rings, and a close approach flashing red in the banner](docs/screenshots/overview.png) | ![Zoomed into the inner solar system: textured Mercury through Jupiter, NEO orbit lines, ecliptic-dimmed haze](docs/screenshots/inner-system.png) |
 | Default god's-eye view. The red banner is a live close-approach alert (99942 Apophis' 2029 flyby). | Zoomed in with NEO orbit lines and planet labels on — the swarm thins out visibly away from the ecliptic plane. |
-| ![Inspector panel open on the Sun, next to the Sentry risk legend and all four inner planets](docs/screenshots/inspector-legend.png) | ![Follow cam locked onto the Sun in dramatic close-up, bloom filling the frame](docs/screenshots/follow-sun.png) |
+| ![Inspector panel open on the Sun, next to the Sentry risk legend and textured Mercury/Venus/Earth/Mars](docs/screenshots/inspector-legend.png) | ![Follow cam locked onto the Sun in dramatic close-up, bloom filling the frame, textured Earth and Mars visible nearby](docs/screenshots/follow-sun.png) |
 | Click any body for its inspector panel; the Sentry risk legend sits bottom-right. | Follow cam locked onto the Sun — selective bloom hits hard up close. |
+
+See [Textures](#textures) below for close-ups of Earth and Saturn.
 
 ## Quick start
 
@@ -53,10 +55,53 @@ npm run preview         # serve the production build locally
 - Close approaches (within ±1 day of a listed encounter) flash the object red
   and surface its name, miss distance (lunar distances), and relative
   velocity.
-- **Impact risk (Sentry)** — the ~2,175 NEOs on JPL's Sentry impact-monitoring
-  list render larger and tinted by Palermo Scale risk tier (see the legend,
-  bottom-right); the inspector shows Palermo scale, impact probability, and
-  potential-impact count for any of them.
+- **Impact risk (Sentry)** — of the ~2,175 NEOs on JPL's Sentry impact-
+  monitoring list, only the ones whose Palermo scale actually merits
+  attention ("serious" or "critical" tier) render larger and tinted (see the
+  legend, bottom-right); the other 2,173 "no likely consequence" objects
+  blend into the ordinary swarm. The inspector shows Palermo scale, impact
+  probability, and potential-impact count for any tracked object.
+- **Featured asteroids** — the 20 largest NEOs by known diameter (Ganymed,
+  Eros, Halley, Toutatis, Phaethon, etc.) render as individual, labeled,
+  clickable, followable bodies instead of anonymous swarm dots. See
+  [Featured asteroids](#featured-asteroids) below.
+
+## Textures
+
+The eight planets use real 2K surface maps (see [Attribution](#attribution)),
+sRGB-correct color space, a Sun point light with a real day/night terminator,
+Earth's night-side city lights, correctly-radial Saturn ring UVs (`RingGeometry`
+defaults to a tangential UV mapping, which smears a radial ring texture into
+nonsense), and real axial tilt/rotation per planet. Follow-cam lazily swaps in
+a sharper 4K map for the followed planet only, disposed on exit.
+
+| Earth | Saturn |
+|---|---|
+| ![Earth in follow-cam, showing the day/night terminator, night-side city lights, and clouds](docs/screenshots/textures/earth-followcam.png) | ![Saturn in follow-cam, showing correctly radial ring banding](docs/screenshots/textures/saturn-followcam.png) |
+| Terminator, night-side city lights, clouds | Correct radial ring banding, not tangential smearing |
+
+## Featured asteroids
+
+Of ~42,300 NEOs, only ~3% have a measured diameter and under 1% have an IAU
+name — most of the swarm is just a designation and an orbit. The 20 largest
+*known*-diameter objects get pulled out as individually modeled bodies
+instead of anonymous instanced dots: real shape and NASA/NEAR-Shoemaker
+surface texture for 433 Eros (the only one here ever actually visited by a
+spacecraft), a deformed "rock" with a generic cratered texture for the rest
+— see [Attribution](#attribution). Sized on a compressed scale that's always
+visibly smaller than any planet: true 1:1 scale would make even the largest
+(Ganymed, ~38 km) an invisible speck next to Mercury's 4,880 km.
+
+| 433 Eros (real shape + texture) | 1036 Ganymed (generic) |
+|---|---|
+| ![433 Eros in follow-cam, showing its real elongated shape and NEAR Shoemaker crater texture](docs/screenshots/asteroids/eros-followcam.png) | ![1036 Ganymed in follow-cam, showing a deformed generic rocky asteroid](docs/screenshots/asteroids/ganymed-followcam.png) |
+| The only NEO in this dataset ever visited by a spacecraft (NEAR Shoemaker, 2000-2001) | Largest known near-Earth asteroid; no spacecraft has visited it, so this is a generic stand-in, not a claimed likeness |
+
+Also surfaced while picking this list: a number of "NEOs" in JPL's dataset
+are actually **comets**, not asteroids (`1P/Halley`, `2P/Encke`, `8P/Tuttle`,
+and more) — `sb-group=neo` pulls in near-Earth comets too. They're rendered
+the same as everything else here; distinguishing them visually is a natural
+follow-up, not yet built.
 
 ## Propagation math
 
@@ -230,8 +275,15 @@ that matter at NEO-population scale (tens of thousands of objects):
 
 ## Attribution
 
-Planet, cloud, and ring textures (`public/textures/`) are the 2K set from
-[Solar System Scope](https://www.solarsystemscope.com/textures), licensed
-under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Re-encoded
-from the source JPG/PNG/TIFF to WebP (quality 85) to keep the committed
-asset size down; no other changes made.
+Planet, cloud, and ring textures (`public/textures/`), high-res follow-cam
+swaps (`public/textures-hires/`), and the generic asteroid stand-in texture
+are the 2K/8K sets from [Solar System Scope](https://www.solarsystemscope.com/textures),
+licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+Re-encoded from the source JPG/PNG/TIFF to WebP (quality 85, and resized to
+4096x2048 for the hi-res set) to keep the committed asset size down; no other
+changes made.
+
+The 433 Eros model (`public/models/eros.glb`) — shape, diffuse texture, and
+normal map — is from NASA's [3D Resources](https://science.nasa.gov/resource/eros-3d-model/),
+built from NEAR Shoemaker mission data. NASA content is generally public
+domain (17 U.S.C. § 105); unmodified here.
