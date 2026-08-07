@@ -12,10 +12,12 @@ Built with Vite + TypeScript + three.js, tested with vitest.
 
 |  |  |
 |---|---|
-| ![Wide view: Sun, planet orbit rings, and a close approach flashing red in the banner](docs/screenshots/overview.png) | ![Zoomed into the inner solar system: Mercury through Jupiter, NEO orbit lines, ecliptic-dimmed haze](docs/screenshots/inner-system.png) |
+| ![Wide view: Sun, textured planet orbit rings, and a close approach flashing red in the banner](docs/screenshots/overview.png) | ![Zoomed into the inner solar system: textured Mercury through Jupiter, NEO orbit lines, ecliptic-dimmed haze](docs/screenshots/inner-system.png) |
 | Default god's-eye view. The red banner is a live close-approach alert (99942 Apophis' 2029 flyby). | Zoomed in with NEO orbit lines and planet labels on — the swarm thins out visibly away from the ecliptic plane. |
-| ![Inspector panel open on the Sun, next to the Sentry risk legend and all four inner planets](docs/screenshots/inspector-legend.png) | ![Follow cam locked onto the Sun in dramatic close-up, bloom filling the frame](docs/screenshots/follow-sun.png) |
+| ![Inspector panel open on the Sun, next to the Sentry risk legend and textured Mercury/Venus/Earth/Mars](docs/screenshots/inspector-legend.png) | ![Follow cam locked onto the Sun in dramatic close-up, bloom filling the frame, textured Earth and Mars visible nearby](docs/screenshots/follow-sun.png) |
 | Click any body for its inspector panel; the Sentry risk legend sits bottom-right. | Follow cam locked onto the Sun — selective bloom hits hard up close. |
+
+See [Textures](#textures) below for close-ups of Earth and Saturn.
 
 ## Quick start
 
@@ -57,6 +59,20 @@ npm run preview         # serve the production build locally
   list render larger and tinted by Palermo Scale risk tier (see the legend,
   bottom-right); the inspector shows Palermo scale, impact probability, and
   potential-impact count for any of them.
+
+## Textures
+
+The eight planets use real 2K surface maps (see [Attribution](#attribution)),
+sRGB-correct color space, a Sun point light with a real day/night terminator,
+Earth's night-side city lights, correctly-radial Saturn ring UVs (`RingGeometry`
+defaults to a tangential UV mapping, which smears a radial ring texture into
+nonsense), and real axial tilt/rotation per planet. Follow-cam lazily swaps in
+a sharper 4K map for the followed planet only, disposed on exit.
+
+| Earth | Saturn |
+|---|---|
+| ![Earth in follow-cam, showing the day/night terminator, night-side city lights, and clouds](docs/screenshots/textures/earth-followcam.png) | ![Saturn in follow-cam, showing correctly radial ring banding](docs/screenshots/textures/saturn-followcam.png) |
+| Terminator, night-side city lights, clouds | Correct radial ring banding, not tangential smearing |
 
 ## Propagation math
 
