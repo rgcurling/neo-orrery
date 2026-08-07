@@ -216,8 +216,17 @@ async function main() {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
-  scene.add(new THREE.AmbientLight(0x223344, 0.6));
-  scene.add(new THREE.PointLight(0xffffff, 3, 0, 0));
+  // Sun light: decay=0 (no inverse-square falloff) so every planet gets the
+  // same illumination regardless of AU distance. Physically-correct decay=2
+  // would put Neptune (30 AU) at ~1/900th of Mercury's (0.39 AU) light --
+  // effectively black -- and would need per-planet intensity compensation
+  // to fix, which is more magic numbers than this scene needs. Body sizes
+  // here are already visually exaggerated for legibility (see PLANET_RADIUS
+  // above); uniform lighting regardless of distance is the same trade.
+  // Ambient is kept low so the day/night terminator (and Earth's night-side
+  // city lights, once textured) actually reads instead of being washed out.
+  scene.add(new THREE.AmbientLight(0x223344, 0.15));
+  scene.add(new THREE.PointLight(0xffffff, 4.5, 0, 0));
 
   scene.add(buildStarfield());
 
